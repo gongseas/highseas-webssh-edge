@@ -1,0 +1,57 @@
+{
+  "name": "highseas-webssh-edge",
+  "version": "1.0.0",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && npm run build:client && npm run build:worker",
+    "build:client": "vite build",
+    "build:worker": "node build-worker.mjs",
+    "typecheck": "tsc -b --pretty false",
+    "worker:dev": "wrangler dev --local",
+    "worker:deploy": "npm run build && wrangler deploy",
+    "test": "tsx --test tests/*.test.ts",
+    "db:local": "wrangler d1 migrations apply highseas-edge --local",
+    "db:remote": "wrangler d1 migrations apply highseas-edge --remote",
+    "setup:cloudflare": "node scripts/setup-cloudflare.mjs"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "cpu-features": "file:worker/shims/cpu-features",
+    "lucide-react": "^0.468.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ssh2": "^1.17.0",
+    "sshpk": "^1.18.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250601.0",
+    "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/sql.js": "^1.4.9",
+    "@types/ssh2": "^1.15.5",
+    "@types/sshpk": "^1.17.5",
+    "@vitejs/plugin-react": "^5.0.0",
+    "esbuild": "^0.28.1",
+    "sql.js": "^1.13.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "wrangler": "^4.103.0"
+  },
+  "overrides": {
+    "cpu-features": "file:worker/shims/cpu-features",
+    "wrangler": {
+      "esbuild": "^0.28.1"
+    },
+    "miniflare": {
+      "ws": "^8.21.0"
+    }
+  }
+}

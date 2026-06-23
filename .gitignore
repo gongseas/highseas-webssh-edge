@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+highseas-master-key.txt
+*.log
