@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mergeNetworkMonitorOutput, MONITOR_COMMAND, NETWORK_MONITOR_COMMAND, parseMonitorOutput } from "../worker/monitor";
+import { enrichLocations, mergeNetworkMonitorOutput, MONITOR_COMMAND, NETWORK_MONITOR_COMMAND, parseMonitorOutput } from "../worker/monitor";
+import type { ListeningPort } from "../shared/types";
 
 function fixture(sent: number, received: number) {
   return [
@@ -56,3 +57,68 @@ test("monitor command keeps collecting after an optional section fails", () => {
   assert.match(merged.split("---HIGHSEAS_SECTION---")[11] ?? "", /LISTEN/);
   assert.match(merged.split("---HIGHSEAS_SECTION---")[12] ?? "", /ESTAB/);
 });
+
+test("location enrichment includes the ISP from the batch provider", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody = "";
+  globalThis.fetch = async (_input, init) => {
+    requestBody = String(init?.body ?? "");
+    return Response.json([{
+      status: "success",
+      country: "中国",
+      regionName: "香港",
+      city: "香港",
+      isp: "Example Telecom",
+      query: "198.51.100.31"
+    }]);
+  };
+  try {
+    const ports = portsWithPeer("198.51.100.31");
+    await enrichLocations(ports);
+    assert.match(requestBody, /198\.51\.100\.31/);
+    assert.equal(ports[0]?.connectedIps[0]?.region, "中国 香港 / Example Telecom");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("location enrichment falls back when the batch provider fails", async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.startsWith("http://ip-api.com/")) return new Response("", { status: 429 });
+    return Response.json({
+      success: true,
+      country: "美国",
+      region: "加利福尼亚州",
+      city: "洛杉矶",
+      connection: { isp: "Fallback Network" }
+    });
+  };
+  try {
+    const ports = portsWithPeer("203.0.113.42");
+    await enrichLocations(ports);
+    assert.equal(requested.length, 2);
+    assert.match(requested[1] ?? "", /ipwho\.is\/203\.0\.113\.42/);
+    assert.equal(ports[0]?.connectedIps[0]?.region, "美国 加利福尼亚州 洛杉矶 / Fallback Network");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function portsWithPeer(ip: string): ListeningPort[] {
+  return [{
+    pid: 1,
+    processName: "test",
+    protocol: "tcp",
+    listenIp: "0.0.0.0",
+    listenPort: 22,
+    ipCount: 1,
+    connectionCount: 1,
+    receiveBytesPerSecond: 0,
+    transmitBytesPerSecond: 0,
+    connectedIps: [{ ip, region: "", connectionCount: 1, receiveBytesPerSecond: 0, transmitBytesPerSecond: 0 }]
+  }];
+}

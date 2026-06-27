@@ -19,8 +19,10 @@ type Props = {
 export function TerminalPane({ profileId, connectionAttempt, language, theme, connectingLabel, disconnectedLabel, onMetrics, onCommandSubmitted, onSocketChange }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const themeRef = useRef(theme);
   const socketRef = useRef<WebSocket | null>(null);
   const onSocketChangeRef = useRef(onSocketChange);
+  themeRef.current = theme;
   onSocketChangeRef.current = onSocketChange;
 
   useEffect(() => {
@@ -30,12 +32,7 @@ export function TerminalPane({ profileId, connectionAttempt, language, theme, co
       cursorBlink: true,
       fontFamily: '"SFMono-Regular", "Cascadia Code", "JetBrains Mono", monospace',
       fontSize: 14,
-      theme: {
-        background: theme === "contrast" ? "#242424" : "#303030",
-        foreground: "#f4f4f4",
-        cursor: "#f4f4f4",
-        selectionBackground: "#4e7092"
-      }
+      theme: terminalTheme(themeRef.current)
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -55,6 +52,11 @@ export function TerminalPane({ profileId, connectionAttempt, language, theme, co
       socketRef.current?.close();
       terminal.dispose();
     };
+  }, []);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (terminal) terminal.options.theme = terminalTheme(theme);
   }, [theme]);
 
   useEffect(() => {
@@ -136,4 +138,13 @@ export function TerminalPane({ profileId, connectionAttempt, language, theme, co
       <div ref={hostRef} className="terminal-host" />
     </section>
   );
+}
+
+function terminalTheme(theme: ThemeMode) {
+  return {
+    background: theme === "contrast" ? "#242424" : "#303030",
+    foreground: "#f4f4f4",
+    cursor: "#f4f4f4",
+    selectionBackground: "#4e7092"
+  };
 }

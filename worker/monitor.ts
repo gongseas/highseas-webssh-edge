@@ -328,6 +328,7 @@ function isPrivateIp(ip: string) {
 }
 
 const LOCATION_TTL = 24 * 60 * 60 * 1000;
+const LOCATION_FAILURE_TTL = 60 * 1000;
 const locationCache = new Map<string, { value: string; expiresAt: number }>();
 
 async function lookupLocationsWithFallback(ips: string[]) {
@@ -338,46 +339,57 @@ async function lookupLocationsWithFallback(ips: string[]) {
     if (cached && cached.expiresAt > Date.now()) result.set(ip, cached.value);
     else missing.push(ip);
   }
-  await Promise.allSettled(missing.slice(0, 30).map(async (ip) => {
-    const response = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?lang=zh`, { signal: AbortSignal.timeout(3000) });
-    if (!response.ok) return;
-    const row = await response.json<{ success: boolean; country?: string; region?: string; city?: string; connection?: { isp?: string; org?: string } }>();
-    if (!row.success) return;
-    const location = [row.country, row.region, row.city].filter((value, index, all) => value && all.indexOf(value) === index).join(" ");
-    const label = [location, row.connection?.isp || row.connection?.org].filter(Boolean).join(" / ") || "未知";
-    locationCache.set(ip, { value: label, expiresAt: Date.now() + LOCATION_TTL });
-    result.set(ip, label);
-  }));
+
+  await lookupWithIpApi(missing, result);
+  const unresolved = missing.filter((ip) => !result.has(ip));
+  await Promise.allSettled(unresolved.slice(0, 30).map((ip) => lookupWithIpWho(ip, result)));
+
+  for (const ip of unresolved) {
+    if (result.has(ip)) continue;
+    locationCache.set(ip, { value: "未知", expiresAt: Date.now() + LOCATION_FAILURE_TTL });
+    result.set(ip, "未知");
+  }
   return result;
 }
 
-async function lookupLocations(ips: string[]) {
-  const result = new Map<string, string>();
-  const missing: string[] = [];
-  for (const ip of ips) {
-    const cached = locationCache.get(ip);
-    if (cached && cached.expiresAt > Date.now()) result.set(ip, cached.value);
-    else missing.push(ip);
-  }
-  if (!missing.length) return result;
+async function lookupWithIpApi(ips: string[], result: Map<string, string>) {
+  if (!ips.length) return;
   try {
-    const response = await fetch("http://ip-api.com/batch?fields=status,country,regionName,city,isp,query&lang=zh-CN", {
+    const response = await fetch("http://ip-api.com/batch?fields=status,country,regionName,city,isp,org,query&lang=zh-CN", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(missing.slice(0, 100).map((query) => ({ query }))),
-      signal: AbortSignal.timeout(3000)
+      headers: { "Accept": "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(ips.slice(0, 100).map((query) => ({ query }))),
+      signal: AbortSignal.timeout(5000)
     });
-    if (!response.ok) return result;
-    const rows = await response.json<Array<{ status: string; query: string; country?: string; regionName?: string; city?: string; isp?: string }>>();
+    if (!response.ok) return;
+    const rows = await response.json<Array<{ status: string; query: string; country?: string; regionName?: string; city?: string; isp?: string; org?: string }>>();
     for (const row of rows) {
       if (row.status !== "success") continue;
-      const location = [row.country, row.regionName, row.city].filter((value, index, all) => value && all.indexOf(value) === index).join(" ");
-      const label = [location, row.isp].filter(Boolean).join(" / ") || "未知";
-      locationCache.set(row.query, { value: label, expiresAt: Date.now() + LOCATION_TTL });
-      result.set(row.query, label);
+      setLocation(row.query, [row.country, row.regionName, row.city], row.isp || row.org, result);
     }
   } catch {
-    return result;
+    // The HTTPS provider below remains available when this free batch API is throttled.
   }
-  return result;
+}
+
+async function lookupWithIpWho(ip: string, result: Map<string, string>) {
+  try {
+    const response = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?lang=zh`, {
+      headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!response.ok) return;
+    const row = await response.json<{ success: boolean; country?: string; region?: string; city?: string; connection?: { isp?: string; org?: string } }>();
+    if (!row.success) return;
+    setLocation(ip, [row.country, row.region, row.city], row.connection?.isp || row.connection?.org, result);
+  } catch {
+    // The caller records a short-lived negative cache entry.
+  }
+}
+
+function setLocation(ip: string, parts: Array<string | undefined>, operator: string | undefined, result: Map<string, string>) {
+  const location = parts.filter((value, index, all) => value && all.indexOf(value) === index).join(" ");
+  const label = [location, operator].filter(Boolean).join(" / ") || "未知";
+  locationCache.set(ip, { value: label, expiresAt: Date.now() + LOCATION_TTL });
+  result.set(ip, label);
 }
