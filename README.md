@@ -6,6 +6,10 @@ Highseas WebSSH Edge 是一个可部署到 Cloudflare Workers 的网页版 SSH/S
 
 [English README](README-EN.md)
 
+## 项目界面
+
+![Highseas WebSSH Edge 工作台](docs/images/highseas-webssh-overview.png)
+
 ## 功能
 
 - 真实 SSH 终端：基于 Cloudflare Workers TCP sockets 和 `ssh2`。

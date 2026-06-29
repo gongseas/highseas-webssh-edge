@@ -4,6 +4,10 @@ Highseas WebSSH Edge is a browser-based SSH/SFTP management console designed for
 
 This repository is the Cloudflare Edge edition. It is independent from the VPS/Node edition and does not include private server data, SSH keys, local databases, or deployment secrets.
 
+## Screenshot
+
+![Highseas WebSSH Edge workspace](docs/images/highseas-webssh-overview.png)
+
 ## Features
 
 - Real SSH terminal over WebSocket, powered by Cloudflare Workers TCP sockets and `ssh2`.
