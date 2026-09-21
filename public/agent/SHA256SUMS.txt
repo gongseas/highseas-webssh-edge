@@ -1,0 +1,2 @@
+6a15270f72d3b18a6b96c566debd47f178f67564209f5208bd6a07a9c740cf86  highseas-monitor-linux-amd64
+1946ddaa65d982a0862fe847bf4179f964a8a48f52a2c95b6e283dcd42cb22a5  highseas-monitor-linux-arm64

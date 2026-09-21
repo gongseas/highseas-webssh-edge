@@ -3,7 +3,9 @@ import { Duplex } from "node:stream";
 import { connect } from "cloudflare:sockets";
 import { Client, type ClientChannel, type SFTPWrapper } from "ssh2";
 import type { Language, RemoteFile, ServerProfile, TerminalMessage } from "../shared/types";
-import { enrichLocations, mergeNetworkMonitorOutput, MONITOR_COMMAND, NETWORK_MONITOR_COMMAND, parseMonitorOutput, type ConnectionSnapshot } from "./monitor";
+import { mergeNetworkMonitorOutput, MONITOR_COMMAND, NETWORK_MONITOR_COMMAND, parseMonitorOutput, type ConnectionSnapshot } from "./monitor";
+import { createLocationUpdates } from "./locationUpdates";
+import { captureMonitorExec } from "./monitorExec";
 import { normalizePrivateKeyForSsh } from "./privateKey";
 
 export type SshBridge = {
@@ -37,7 +39,12 @@ export function createSshBridge(socket: WebSocket, options: SshBridgeOptions): S
   let shellSize: ShellSize = { cols: 80, rows: 24 };
   let metricsTimer: ReturnType<typeof setInterval> | null = null;
   let metricsRunning = false;
+  let closed = false;
+  const monitorAbort = new AbortController();
   let connectionSnapshot: ConnectionSnapshot | null = null;
+  const locations = createLocationUpdates<NonNullable<ReturnType<typeof parseMonitorOutput>>["metrics"] & { processes: import("../shared/types").ProcessInfo[] }>(
+    ({ processes, ...metrics }) => send({ type: "metrics", metrics, processes })
+  );
   const uploadStreams = new Map<string, NodeJS.WritableStream>();
 
   const MAX_READ_SIZE = 2 * 1024 * 1024;
@@ -94,10 +101,14 @@ export function createSshBridge(socket: WebSocket, options: SshBridgeOptions): S
           startMetricsCollection();
         })
         .on("banner", (message) => send({ type: "output", data: `${message}\r\n` }))
-        .on("error", (error) => send({ type: "error", message: `${copy.connectFailed}${error.message}` }))
+        .on("error", (error) => {
+          send({ type: "error", message: `${copy.connectFailed}${error.message}` });
+          close();
+        })
         .on("close", () => {
           send({ type: "status", state: "closed" });
           send({ type: "output", data: `\r\n${copy.connectionClosed}\r\n` });
+          close();
         });
 
       const privateKey = profile.credentialKind === "privateKey" && profile.privateKey
@@ -166,49 +177,25 @@ export function createSshBridge(socket: WebSocket, options: SshBridgeOptions): S
     metricsTimer = setInterval(collectMetrics, 3000);
   }
 
-  function collectMetrics() {
-    if (!conn || metricsRunning) return;
+  async function collectMetrics() {
+    if (!conn || metricsRunning || closed) return;
     const activeConnection = conn;
     metricsRunning = true;
-    activeConnection.exec(MONITOR_COMMAND, (err, channel) => {
-      if (err) {
-        metricsRunning = false;
-        return;
+    try {
+      const output = await captureMonitorExec(activeConnection, MONITOR_COMMAND, monitorAbort.signal);
+      const networkOutput = await captureMonitorExec(activeConnection, NETWORK_MONITOR_COMMAND, monitorAbort.signal);
+      if (closed || conn !== activeConnection) return;
+      const result = parseMonitorOutput(mergeNetworkMonitorOutput(output, networkOutput), connectionSnapshot);
+      if (!result) throw new Error("Incomplete monitor sample");
+      connectionSnapshot = result.snapshot;
+      locations.update({ ...result.metrics, processes: result.processes });
+      send({ type: "monitor-status", state: "ok" });
+    } catch (error) {
+      if (!closed) {
+        send({ type: "monitor-status", state: "retrying" });
+        console.warn(JSON.stringify({ event: "monitor_sample_failed", reason: error instanceof Error ? error.message : "unknown" }));
       }
-      let output = "";
-      channel.on("data", (data: Buffer | string) => { output += data.toString(); });
-      channel.stderr.on("data", () => {});
-      channel.on("close", () => {
-        void (async () => {
-          try {
-            const networkOutput = await captureExec(activeConnection, NETWORK_MONITOR_COMMAND).catch(() => "");
-            const result = parseMonitorOutput(mergeNetworkMonitorOutput(output, networkOutput), connectionSnapshot);
-            if (!result) return;
-            connectionSnapshot = result.snapshot;
-            send({ type: "metrics", metrics: result.metrics, processes: result.processes });
-            const hasUnresolvedLocations = result.metrics.listeningPorts.some((port) => port.connectedIps.some((peer) => !peer.region));
-            if (hasUnresolvedLocations) {
-              await enrichLocations(result.metrics.listeningPorts);
-              send({ type: "metrics", metrics: result.metrics, processes: result.processes });
-            }
-          } finally {
-            metricsRunning = false;
-          }
-        })();
-      });
-    });
-  }
-
-  function captureExec(client: Client, command: string) {
-    return new Promise<string>((resolve, reject) => {
-      client.exec(command, (error, channel) => {
-        if (error) { reject(error); return; }
-        let output = "";
-        channel.on("data", (data: Buffer | string) => { output += data.toString(); });
-        channel.stderr.on("data", () => {});
-        channel.on("close", () => resolve(output));
-      });
-    });
+    } finally { metricsRunning = false; }
   }
 
   function handleProcessSignal(requestId: string, pid: number, signal: "TERM" | "KILL" | "HUP") {
@@ -343,6 +330,10 @@ export function createSshBridge(socket: WebSocket, options: SshBridgeOptions): S
   }
 
   function close() {
+    if (closed) return;
+    closed = true;
+    monitorAbort.abort();
+    locations.close();
     if (metricsTimer) { clearInterval(metricsTimer); metricsTimer = null; }
     for (const stream of uploadStreams.values()) stream.end();
     uploadStreams.clear();
@@ -354,10 +345,16 @@ export function createSshBridge(socket: WebSocket, options: SshBridgeOptions): S
     conn = null;
     tcpStream?.destroy();
     tcpStream = null;
+    if (socket.readyState === WebSocket.OPEN) {
+      send({ type: "status", state: "closed" });
+      socket.close(1000, "SSH session closed");
+    }
   }
 
   return {
     handleClientMessage(message) {
+      if (closed) return;
+      if (message.type === "ping") send({ type: "pong" });
       if (message.type === "input") handleInput(message.data);
       if (message.type === "resize") handleResize(message.cols, message.rows);
       if (message.type === "sftp-ls") handleSftpLs(message.requestId, message.path);

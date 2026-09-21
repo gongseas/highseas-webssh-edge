@@ -16,12 +16,29 @@ Highseas WebSSH Edge 是一个可部署到 Cloudflare Workers 的网页版 SSH/S
 - 服务器管理：支持分组、标签、密码登录、PEM/OpenSSH 私钥和 PuTTY PPK 私钥。
 - SFTP 文件管理：支持目录浏览、上传、下载、文本文件双击编辑和保存。
 - 系统监控：CPU、内存、Swap、磁盘、运行时间、负载和进程列表。
-- 网络监控：显示监听 IP、端口、连接 IP、IP 归属地、连接数和上下行速率。
+- 网络监控：显示 TCP/UDP 监听 IP、端口、连接 IP、IP 归属地、连接数和上下行速率。
 - 快捷命令：统一管理自定义命令，一键发送到当前 SSH 会话。
 - 安全登录：管理员账号、密码哈希、Session Cookie、登录限速、TOTP 二次验证和恢复码。
 - 加密存储：SSH 密码、私钥、私钥口令和 TOTP 密钥使用 AES-256-GCM 加密保存。
 - 命令历史：可选开启，并过滤常见敏感命令。
 - Cloudflare D1 数据库迁移和一键初始化部署脚本。
+
+## UDP 对端监控
+
+部分 VPS 内核不会通过 `ss` 或 conntrack 公开 UDP 对端。需要采集 UDP 对端 IP、端口、PID 和实时速率时，在被管理的 Debian/Ubuntu VPS 上安装分析数据包头部的 Highseas Monitor：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gongseas/highseas-webssh-edge/main/public/agent/install.sh | sudo bash
+```
+
+支持 AMD64 和 ARM64。安装后重新连接 WebSSH，产生 UDP 流量后网络面板会自动显示。详细说明见 [UDP 监控文档](docs/UDP-MONITOR-CN.md)。
+
+## 近期更新
+
+- 快速连接按最近使用顺序排列，在当前浏览器内按账号保存。
+- 网络进程支持折叠、TCP/UDP 筛选、速率排序、拖动列宽和详情分区；工具面板可最大化。
+- Highseas Monitor 0.3.0 改进 UDP 双向采集与短时速率计算，提供 AMD64/ARM64 预编译程序。
+- IP 归属地异步更新，不阻塞监控；监控超时自动重试，增加连接心跳、数据停更提示和手动重连。
 
 ## 环境要求
 

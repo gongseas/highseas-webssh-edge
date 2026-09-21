@@ -18,6 +18,18 @@ export default function App() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [settings, setSettings] = useState<AppSettings>(fallbackSettings);
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
+  const [recentConnections, setRecentConnections] = useState<string[]>([]);
+  const recentConnectionsKey = `highseas.recentConnections.${auth?.user?.id ?? "anonymous"}`;
+  useEffect(() => {
+    try {
+      const stored: unknown = JSON.parse(localStorage.getItem(recentConnectionsKey) ?? "[]");
+      setRecentConnections(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string").slice(0, 500) : []);
+    } catch { setRecentConnections([]); }
+  }, [recentConnectionsKey]);
+  const quickConnectProfiles = useMemo(() => {
+    const order = new Map(recentConnections.map((id, index) => [id, index]));
+    return [...profiles].sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
+  }, [profiles, recentConnections]);
   const [sessionIds, setSessionIds] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [runtimes, setRuntimes] = useState<Record<string, SessionRuntime>>({});
@@ -41,7 +53,13 @@ export default function App() {
     });
   }, []);
 
-  function openSession(id: string) { setSessionIds((current) => current.includes(id) ? current : [...current, id]); setActiveId(id); }
+  function openSession(id: string) {
+    const recent = [id, ...recentConnections.filter(item => item !== id)].slice(0, 500);
+    setRecentConnections(recent);
+    try { localStorage.setItem(recentConnectionsKey, JSON.stringify(recent)); } catch { /* Session ordering still works when storage is disabled. */ }
+    setSessionIds((current) => current.includes(id) ? current : [...current, id]);
+    setActiveId(id);
+  }
   function closeSession(id: string) {
     setSessionIds((current) => {
       const next = current.filter((item) => item !== id);
@@ -92,7 +110,12 @@ export default function App() {
           </nav>
           <button className="new-session-button" type="button" title={t("saveVps")} onClick={() => setServerBrowserOpen(true)}><Plus size={18} /></button>
         </div>
-        {!sessionIds.length ? <section className="empty-workspace"><Server size={30} /><strong>{t("noConnection")}</strong><span>{t("selectConnectionHint")}</span></section> : null}
+        {!sessionIds.length ? <section className="quick-connect-workspace">
+          <div className="quick-connect-list"><header>{settings.language === "zh" ? "快速连接" : "Quick connect"}<span>{profiles.length}</span></header>
+            {quickConnectProfiles.map(profile => <button key={profile.id} type="button" onClick={() => { openSession(profile.id); setServerBrowserOpen(false); }}><span><Server size={14} />{profile.name}</span><span title={profile.groupName}>{profile.groupName || "/"}</span><span>{profile.username}</span></button>)}
+            {!profiles.length ? <button type="button" onClick={() => setServerBrowserOpen(true)}>{t("selectConnectionHint")}</button> : null}
+          </div>
+        </section> : null}
         {sessionIds.map((id) => { const profile = profiles.find((item) => item.id === id); return profile ? <SessionWorkspace key={id} profile={profile} active={id === activeId} settings={settings} runtime={runtimes[id]} t={t} updateRuntime={updateRuntime} /> : null; })}
       </div>
     </main>
@@ -102,7 +125,8 @@ export default function App() {
 function SessionWorkspace({ profile, active, settings, runtime, t, updateRuntime }: { profile: ServerProfile; active: boolean; settings: AppSettings; runtime?: SessionRuntime; t: TFunction; updateRuntime: (id: string, patch: Partial<SessionRuntime>) => void }) {
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [socket, setSocket] = useState<WebSocket | null>(null);
-  const [toolsHeight, setToolsHeight] = useState(248);
+  const [toolsHeight, setToolsHeight] = useState(340);
+  const [toolsExpanded, setToolsExpanded] = useState(false);
   const workspaceRef = useRef<HTMLElement>(null);
   const onMetrics = useCallback((metrics: ServerMetrics, processes: ProcessInfo[]) => updateRuntime(profile.id, { metrics, processes }), [profile.id, updateRuntime]);
   const onSocketChange = useCallback((next: WebSocket | null) => { setSocket(next); updateRuntime(profile.id, { socket: next }); }, [profile.id, updateRuntime]);
@@ -114,7 +138,7 @@ function SessionWorkspace({ profile, active, settings, runtime, t, updateRuntime
     const startHeight = toolsHeight;
     const availableHeight = workspaceRef.current?.clientHeight ?? 700;
     document.body.classList.add("is-resizing", "is-resizing-rows");
-    const move = (nextEvent: PointerEvent) => setToolsHeight(Math.min(availableHeight - 230, Math.max(150, startHeight + startY - nextEvent.clientY)));
+    const move = (nextEvent: PointerEvent) => setToolsHeight(Math.min(availableHeight - 150, Math.max(150, startHeight + startY - nextEvent.clientY)));
     const stop = () => {
       document.body.classList.remove("is-resizing", "is-resizing-rows");
       window.removeEventListener("pointermove", move);
@@ -124,10 +148,10 @@ function SessionWorkspace({ profile, active, settings, runtime, t, updateRuntime
     window.addEventListener("pointerup", stop, { once: true });
   }
 
-  return <section ref={workspaceRef} className={active ? "session-workspace active" : "session-workspace"} style={active ? { gridTemplateRows: `24px minmax(220px, 1fr) 6px ${toolsHeight}px` } : undefined}>
+  return <section ref={workspaceRef} className={`${active ? "session-workspace active" : "session-workspace"}${toolsExpanded ? " tools-expanded" : ""}`} style={active ? { gridTemplateRows: toolsExpanded ? "24px 0px 0px minmax(0, 1fr)" : `24px minmax(120px, 1fr) 6px min(${toolsHeight}px, calc(100% - 150px))` } : undefined}>
     <div className="context-line"><span>{profile.username}@{profile.host}</span><small>{t("port")} {profile.port}</small></div>
     <TerminalPane profileId={profile.id} connectionAttempt={1} language={settings.language} theme={settings.theme} connectingLabel={t("connecting")} disconnectedLabel={t("disconnected")} onMetrics={onMetrics} onCommandSubmitted={onCommand} onSocketChange={onSocketChange} />
     <div className="splitter splitter-horizontal" role="separator" aria-orientation="horizontal" title={settings.language === "zh" ? "拖动调整终端和工具区高度" : "Drag to resize terminal and tools"} onPointerDown={beginToolsResize} />
-    <SessionTools socket={socket} metrics={runtime?.metrics} processes={runtime?.processes ?? []} settings={settings} historyRefreshKey={historyRefreshKey} t={t} />
+    <SessionTools socket={socket} metrics={runtime?.metrics} processes={runtime?.processes ?? []} settings={settings} historyRefreshKey={historyRefreshKey} t={t} expanded={toolsExpanded} onExpand={() => setToolsExpanded(value => !value)} />
   </section>;
 }

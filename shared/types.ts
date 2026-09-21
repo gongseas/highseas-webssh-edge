@@ -61,6 +61,7 @@ export type ServerMetrics = {
   uptimeSeconds: number;
   loadAverage: [number, number, number];
   listeningPorts: ListeningPort[];
+  udpMonitorVersion?: string;
   updatedAt: string;
 };
 
@@ -76,6 +77,7 @@ export type ProcessInfo = {
 
 export type ConnectedIp = {
   ip: string;
+  ports: number[];
   region: string;
   connectionCount: number;
   receiveBytesPerSecond: number;
@@ -114,6 +116,9 @@ export type RemoteFile = {
 };
 
 export type TerminalMessage =
+  | { type: "ping" }
+  | { type: "pong" }
+  | { type: "monitor-status"; state: "ok" | "retrying" }
   | { type: "hello"; profileId: string }
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
